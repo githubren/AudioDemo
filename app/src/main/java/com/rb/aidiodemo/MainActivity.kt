@@ -1,10 +1,7 @@
 package com.rb.aidiodemo
 
 import android.Manifest
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaPlayer
-import android.media.MediaRecorder
+import android.media.*
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Environment
@@ -17,6 +14,8 @@ import java.io.FileOutputStream
 import java.lang.Exception
 import kotlin.concurrent.thread
 import com.permissionx.guolindev.PermissionX
+import java.io.ByteArrayOutputStream
+import java.io.FileInputStream
 
 
 class MainActivity : AppCompatActivity() {
@@ -28,6 +27,10 @@ class MainActivity : AppCompatActivity() {
     private var sdDir : File? = null
     private var player : MediaPlayer? = null
     private var wavFile : File? = null
+
+    private var audioTrack : AudioTrack? = null
+    private var audioData : ByteArray? = null
+    private var trackBufferSize = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +56,23 @@ class MainActivity : AppCompatActivity() {
             AudioFormat.ENCODING_PCM_16BIT
         )
 
+        //AudioTrack缓冲区大小  第二个参数播放用out  录制用in
+        trackBufferSize = AudioTrack.getMinBufferSize(
+            44100,
+            AudioFormat.CHANNEL_OUT_STEREO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        //实例化AudioTrack对象  使用MODE_STREAM模式  （MODE_STATIC是把文件先写入到缓冲区 录音文件比较大 用这种容易发生oom）
+        audioTrack = AudioTrack(
+            AudioManager.STREAM_MUSIC,
+            44100,
+            AudioFormat.CHANNEL_OUT_STEREO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            trackBufferSize,
+            AudioTrack.MODE_STREAM
+        )
+
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             44100,
@@ -61,7 +81,7 @@ class MainActivity : AppCompatActivity() {
             recordBufferSize
         )
 
-        //录制M
+        //录制
         btn_record.setOnClickListener {
             if (isRecording) return@setOnClickListener
             isRecording = true
@@ -84,15 +104,62 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this,"请先停止录音", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            //通过AudioTrack播放（AudioTrack只能播放pcm数据流）
+            playByAudioTrack()
+
+            //通过MediaPlayer播放（MediaPlayer能播放多种格式的音频，是对AudioTrack的封装）
+            playByMediaPlayer()
+        }
+    }
+
+    /**
+     * 通过MediaPlayer播放音频
+     */
+    private fun playByMediaPlayer() {
+        try {
+            player?.let {
+                it.setDataSource(wavFile?.path)
+                it.prepare()
+                it.start()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * 通过AudioTrack播放音频
+     */
+    private fun playByAudioTrack() {
+        thread {
+            var fis: FileInputStream? = null
             try {
-                player?.let {
-                    it.setDataSource(wavFile?.path)
-                    it.prepare()
-                    it.start()
+                val tempBuffer = ByteArray(trackBufferSize)
+                var readCount = 0
+                fis = FileInputStream(wavFile!!)
+                while (fis.available() > 0) {
+                    readCount = fis.read(tempBuffer)
+                    if (readCount == AudioTrack.ERROR_INVALID_OPERATION || readCount == AudioTrack.ERROR_BAD_VALUE) {
+                        continue
+                    }
+                    if (readCount != 0 && readCount != -1) {
+                        audioTrack?.play()
+                        audioTrack?.write(tempBuffer, 0, readCount)
+                    }
                 }
 
-            }catch (e: Exception){
+    //                    val out = ByteArrayOutputStream(trackBufferSize)
+    //                    var b: Int = fis.read()
+    //                    while (b != -1) {
+    //                        out.write(b)
+    //                    }
+    //                    audioData = out.toByteArray()
+    //                    audioTrack?.write(audioData!!,0,audioData?.size?:0)
+    //                    audioTrack?.play()
+            } catch (e: Exception) {
                 e.printStackTrace()
+            } finally {
+                fis?.close()
             }
         }
     }
@@ -124,7 +191,7 @@ class MainActivity : AppCompatActivity() {
         thread {
             if (audioRecord?.state == AudioRecord.STATE_UNINITIALIZED) return@thread
             audioRecord?.startRecording()
-            var os: FileOutputStream?
+            val os: FileOutputStream?
             try {
                 os = FileOutputStream(pcmFile)
                 val bytes = ByteArray(recordBufferSize)
